@@ -1,0 +1,191 @@
+version: '3.8'
+
+services:
+  # Nikto API
+  nikto-api:
+    build:
+      context: .
+      dockerfile: nikto_api/Dockerfile
+    ports:
+      - "5001:5001"
+    environment:
+      - NIKTO_API_HOST=0.0.0.0
+      - NIKTO_API_PORT=5001
+      - NIKTO_API_DEBUG=false
+    volumes:
+      - ./scans:/app/scans
+      - /tmp:/tmp
+    networks:
+      - scanner-network
+    restart: unless-stopped
+
+  # OWASP ZAP API
+  zap-api:
+    build:
+      context: .
+      dockerfile: zap_api/Dockerfile
+    ports:
+      - "5002:5002"
+    environment:
+      - ZAP_API_HOST=0.0.0.0
+      - ZAP_API_PORT=5002
+      - ZAP_API_DEBUG=false
+      - ZAP_PROXY_URL=http://zap:8080
+      - ZAP_API_KEY=your-api-key-here
+    depends_on:
+      - zap
+    networks:
+      - scanner-network
+    restart: unless-stopped
+
+  # OWASP ZAP Daemon
+  zap:
+    image: owasp/zap2docker-stable
+    ports:
+      - "8080:8080"
+    command: >
+      zap.sh -daemon
+      -host 0.0.0.0
+      -port 8080
+      -config api.addrs.addr.name=.*
+      -config api.addrs.addr.regex=true
+      -config api.key=your-api-key-here
+    volumes:
+      - zap-data:/zap/wrk
+    networks:
+      - scanner-network
+    restart: unless-stopped
+
+  # Tenable API (requires Nessus installation)
+  tenable-api:
+    build:
+      context: .
+      dockerfile: tenable_api/Dockerfile
+    ports:
+      - "5003:5003"
+    environment:
+      - TENABLE_API_HOST=0.0.0.0
+      - TENABLE_API_PORT=5003
+      - TENABLE_API_DEBUG=false
+      - TENABLE_URL=https://nessus:8834
+      - TENABLE_ACCESS_KEY=${TENABLE_ACCESS_KEY}
+      - TENABLE_SECRET_KEY=${TENABLE_SECRET_KEY}
+    depends_on:
+      - nessus
+    networks:
+      - scanner-network
+    restart: unless-stopped
+
+  # Nessus Scanner (Community Edition)
+  nessus:
+    image: tenable/nessus:latest-ubuntu
+    ports:
+      - "8834:8834"
+    environment:
+      - NESSUS_ACTIVATION_CODE=${NESSUS_ACTIVATION_CODE}
+      - NESSUS_USERNAME=admin
+      - NESSUS_PASSWORD=changeme123
+    volumes:
+      - nessus-data:/opt/nessus/var/nessus
+    networks:
+      - scanner-network
+    restart: unless-stopped
+
+  # OpenVAS API
+  openvas-api:
+    build:
+      context: .
+      dockerfile: openvas_api/Dockerfile
+    ports:
+      - "5004:5004"
+    environment:
+      - OPENVAS_API_HOST=0.0.0.0
+      - OPENVAS_API_PORT=5004
+      - OPENVAS_API_DEBUG=false
+      - OPENVAS_HOST=openvas
+      - OPENVAS_PORT=9390
+      - OPENVAS_USER=admin
+      - OPENVAS_PASSWORD=admin123
+    depends_on:
+      - openvas
+    networks:
+      - scanner-network
+    restart: unless-stopped
+
+  # OpenVAS Scanner
+  openvas:
+    image: mikesplain/openvas
+    ports:
+      - "9390:9390"
+      - "9391:9391"
+      - "9392:9392"
+    environment:
+      - OV_PASSWORD=admin123
+      - OV_SKIPSYNC=true
+    volumes:
+      - openvas-data:/var/lib/openvas
+      - openvas-logs:/var/log/openvas
+    networks:
+      - scanner-network
+    restart: unless-stopped
+
+  # API Gateway (Optional - for unified access)
+  api-gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      - GATEWAY_HOST=0.0.0.0
+      - GATEWAY_PORT=5000
+      - NIKTO_API_URL=http://nikto-api:5001
+      - ZAP_API_URL=http://zap-api:5002
+      - TENABLE_API_URL=http://tenable-api:5003
+      - OPENVAS_API_URL=http://openvas-api:5004
+    depends_on:
+      - nikto-api
+      - zap-api
+      - tenable-api
+      - openvas-api
+    networks:
+      - scanner-network
+    restart: unless-stopped
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - scanner-network
+    restart: unless-stopped
+
+  # PostgreSQL for results storage (optional)
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=scanners
+      - POSTGRES_USER=scanner_user
+      - POSTGRES_PASSWORD=scanner_pass
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - scanner-network
+    restart: unless-stopped
+
+volumes:
+  zap-data:
+  nessus-data:
+  openvas-data:
+  openvas-logs:
+  redis-data:
+  postgres-data:
+
+networks:
+  scanner-network:
+    driver: bridge
